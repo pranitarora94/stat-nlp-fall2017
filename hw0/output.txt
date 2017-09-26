@@ -1,6 +1,6 @@
 ---
 name:
-   first: Abhinav
-   last: Gupta
-email: abhinavg@nyu.edu
-leaderboard: backpropper
+   first: Pranit
+   last: Arora
+email: pa1230@nyu.edu
+leaderboard: pranit
