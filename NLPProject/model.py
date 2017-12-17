@@ -73,7 +73,9 @@ class Net(nn.Module):
         q_lens_sorted, q_ind = torch.sort(q_lens,descending=True)
         q_sorted = q_emd[q_ind]
         #print(type(p), type(q_sorted), q_sorted.size())
-        q_dash_pack = torch.nn.utils.rnn.pack_padded_sequence(q_sorted.permute(1,0,2), q_lens_sorted.data.cpu().int().numpy().tolist(), )
+        q_dash_pack = torch.nn.utils.rnn.pack_padded_sequence(q_sorted.permute(1,0,2), q_lens_sorted.data.cpu().int().numpy().tolist())
+        self.q_hidden[0].detach_()
+        self.q_hidden[1].detach_()
         q_dash_sorted, self.q_hidden = self.bilstm_q(q_dash_pack, self.q_hidden)
         q_dash, q_unpacked_len = torch.nn.utils.rnn.pad_packed_sequence(q_dash_sorted)
         q_dash = q_dash.permute(1,0,2)
@@ -124,6 +126,8 @@ class Net(nn.Module):
         p_lens_sorted, p_ind = torch.sort(p_lens,descending=True)
         p_star_sorted = p_star[p_ind]
         p_star_pack = torch.nn.utils.rnn.pack_padded_sequence(p_star_sorted.permute(1,0,2), p_lens_sorted.data.cpu().int().numpy().tolist())
+        self.p_hidden[0].detach_()
+        self.p_hidden[1].detach_()
         p_star_dash_sorted, self.p_hidden = self.bilstm_pstar(p_star_pack, self.p_hidden) #TODO init hidden
         p_star_dash, p_unpacked_len = torch.nn.utils.rnn.pad_packed_sequence(p_star_dash_sorted)
         p_star_dash = p_star_dash.permute(1,0,2)
