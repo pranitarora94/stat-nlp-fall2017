@@ -32,17 +32,19 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 
 
+num_layers, hidden_dim, batch_size = 2, 100, 40
+
 
 class Config(object):
     def __init__(self, compared=[], **kwargs):
         self.name = "RaSoR"
         self.word_emb_data_path_prefix = 'data/preprocessed_glove_with_unks.split'  # path of preprocessed word embedding data, produced by setup.py
-        self.tokenized_trn_json_path = 'data/train-v1.1.tokenized.split.json'  # path of tokenized training set JSON, produced by setup.py
+        self.tokenized_trn_json_path = 'data/small_train.json'  # path of tokenized training set JSON, produced by setup.py
         self.tokenized_dev_json_path = 'data/dev-v1.1.tokenized.split.json'  # path of tokenized dev set JSON, produced by setup.py
         self.max_ans_len = 30  # maximal answer length, answers of longer length are discarded
         self.emb_dim = 300  # dimension of word embeddings
         self.ff_dim = 100
-        self.batch_size = 40
+        self.batch_size = 10
         self.max_num_epochs = 150  # max number of epochs to train for
         self.num_layers = 2  # number of BiLSTM layers, where BiLSTM is applied
         self.hidden_dim = 100  # dimension of hidden state of each uni-directional LSTM
@@ -135,17 +137,29 @@ def load_train_data(file_name):
     answers = torch.FloatTensor(answers).long()
     return p, p_lens, q, q_lens, q_to_p_id, answers
 
-comp_p, comp_p_lens, comp_q, comp_q_lens, q_to_p_id, comp_answers = load_train_data('data/train-v1.1.tokenized.split.json')
-#print("comp_size = " + str(comp_q.size))
+comp_p, comp_p_lens, comp_q, comp_q_lens, q_to_p_id, comp_answers = load_train_data(config.tokenized_trn_json_path)
+v_comp_p, v_comp_p_lens, v_comp_q, v_comp_q_lens, v_q_to_p_id, v_comp_answers = load_train_data(config.tokenized_dev_json_path)
+
+def init_hidden(num_layers, hidden_dim, batch_size):
+    #zero_t = torch.zeros(num_layers * 2, batch_size, hidden_dim)
+    t = torch.zeros(num_layers * 2, batch_size, hidden_dim)
+    if torch.cuda.is_available():
+        t = t.cuda(0)
+
+    hidden = (Variable(t), Variable(t))
+    return hidden
+
+
 
 def train(epoch, model):
     global comp_p, comp_p_lens, comp_q, comp_q_lens, q_to_p_id, comp_answers
     #comp_p, comp_p_lens, comp_q, comp_q_lens, q_to_p_id, comp_answers  = load_train_data()
     num_samples = comp_q.size(0)
     #print(num_samples, type(num_samples))
+
     if torch.cuda.is_available():
         #print("Converting to cuda")
-	comp_p = comp_p.long().cuda(0)
+        comp_p = comp_p.long().cuda(0)
         comp_p_lens = comp_p_lens.long().cuda(0)
         comp_q = comp_q.long().cuda(0)
         comp_q_lens = comp_q_lens.long().cuda(0)
@@ -158,6 +172,7 @@ def train(epoch, model):
     np_rng = np.random.RandomState(config.seed // 2)
     idxs = np.array(range(num_samples))   #TODO check logic
     np_rng.shuffle(idxs)
+
     model.train()
     parameters = ifilter(lambda p: p.requires_grad, model.parameters())
     optimizer = optim.SGD(parameters, lr=args.lr, momentum=args.momentum) #TODO use adam?
@@ -182,14 +197,28 @@ def train(epoch, model):
         q = comp_q[qtn_idxs]
         q_lens = comp_q_lens[qtn_idxs]
         answer = Variable(comp_answers[qtn_idxs])
+
+
+        p_hidden = init_hidden(num_layers, hidden_dim, config.batch_size)
+        q_hidden = init_hidden(num_layers, hidden_dim, config.batch_size)
+
         model.zero_grad()
+
         #print(type(p), type(p[0][0]))
-        scores = model( Variable(p, requires_grad=False), Variable(p_lens, requires_grad=False),
-                   Variable(q, requires_grad=False), Variable(q_lens, requires_grad=False))
+        scores = model(Variable(p, requires_grad=False), Variable(p_lens, requires_grad=False),
+                       Variable(q, requires_grad=False), Variable(q_lens, requires_grad=False),
+                       p_hidden, q_hidden)
+
         #print("got scores")
         #print(scores.size())
         #print(scores)
+
+
+
+
         loss = loss_function(scores, answer)
+
+
         _, pred_a = torch.max(scores, 1)
         #pred_a = pred_a.squeeze(1)
 
@@ -202,25 +231,31 @@ def train(epoch, model):
 
         losses.append(loss.data[0])
         accs.append(accuracy.data[0])
-	
-	print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch+1, st_in, num_samples,
-                100. * st_in / num_samples, loss.data[0]))
+
+        print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+            epoch+1, st_in, num_samples,
+            100. * st_in / num_samples, loss.data[0]))
         #if batch_idx % 500 == 0:
-            #save frequency, creates a 140MB file
-         #   torch.save(model.state_dict(), './model' +str(batch_idx)+ '.pth')
+        #save frequency, creates a 140MB file
+        #   torch.save(model.state_dict(), './model' +str(batch_idx)+ '.pth')
 
     trn_loss = np.average(losses)
     trn_acc = np.average(accs)
     return trn_loss, trn_acc
 
-v_comp_p, v_comp_p_lens, v_comp_q, v_comp_q_lens, v_q_to_p_id, v_comp_answers = load_train_data('data/dev-v1.1.tokenized.split.json')
+
+
+
+
+
+
+
 def validation(model):
     # comp_p, comp_p_lens, comp_q, comp_q_lens, q_to_p_id, comp_answers  = load_train_data()
     global v_comp_p, v_comp_p_lens, v_comp_q, v_comp_q_lens,v_q_to_p_id, v_comp_answers
     print("Validation")
     if torch.cuda.is_available():
-	print("Validation cuda")
+        print("Validation cuda")
         v_comp_p = v_comp_p.long().cuda(0)
         v_comp_p_lens = v_comp_p_lens.long().cuda(0)
         v_comp_q = v_comp_q.long().cuda(0)
@@ -246,18 +281,31 @@ def validation(model):
             qtn_idxs = qtn_idxs.cuda(0)
         if len(batch_idxs) != config.batch_size:
             print(len(batch_idxs), config.batch_size)
-	    continue  # LSTM may give error
-	print("staring batch", st_in)
+            continue  # LSTM may give error
+        print("staring batch", st_in)
         print("Max length ", v_comp_p_lens.max())
-	temp_index = v_q_to_p_id[qtn_idxs].long()
-	p = v_comp_p[temp_index]
+        temp_index = v_q_to_p_id[qtn_idxs].long()
+        p = v_comp_p[temp_index]
         p_lens = v_comp_p_lens[temp_index]
         q = v_comp_q[qtn_idxs]
         q_lens = v_comp_q_lens[qtn_idxs]
         #answer = comp_answers[qtn_idxs]
-	answer = Variable(v_comp_answers[qtn_idxs])
+        answer = Variable(v_comp_answers[qtn_idxs])
+        
+
+	p_hidden = init_hidden(num_layers, hidden_dim, config.batch_size)
+        q_hidden = init_hidden(num_layers, hidden_dim, config.batch_size)
+
+        model.zero_grad()
+
+        #print(type(p), type(p[0][0]))
         scores = model(Variable(p, requires_grad=False), Variable(p_lens, requires_grad=False),
-                       Variable(q, requires_grad=False), Variable(q_lens, requires_grad=False))
+                       Variable(q, requires_grad=False), Variable(q_lens, requires_grad=False),
+                       p_hidden, q_hidden)
+
+        #print("got scores")
+        #print(scores.size())
+        #print(scores)
 	print("calc val scores")
         loss = loss_function(scores, answer)
         _, pred_a = torch.max(scores, 1)
@@ -291,10 +339,10 @@ def main():
     for epoch in range(args.epochs):
         print("Starting epoch " + str(epoch+1))
         trn_loss, trn_accuracy = train(epoch, model)
-	print("trn_accuarcy: ",str(trn_accuracy))
-	print("trn_loss: ",str(trn_loss))
+        print("trn_accuarcy: ",str(trn_accuracy))
+        print("trn_loss: ",str(trn_loss))
         dev_loss, dev_accuracy = validation(model)
-	print("dev_accuarcy: ",str(dev_accuracy))
+        print("dev_accuarcy: ",str(dev_accuracy))
         print("dev_loss: ",str(dev_loss))
         if (epoch%5==4):
             model_file = 'model_' + str(epoch) + '.pth'
@@ -302,4 +350,7 @@ def main():
             print( '\nSaved model to ' + model_file + '.')
 
 
+
+
 main()
+
